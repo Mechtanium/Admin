@@ -2,6 +2,9 @@ import math
 import re
 import numpy
 import pandas
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import export_graphviz
+import pickle as pkl
 
 l2 = "2L"
 l1 = "1L"
@@ -21,6 +24,14 @@ man_col = "Manifold Pressure (PSI)"
 out_folder = "output/"
 well_key = "wellhead"
 flow_key = "flowstation"
+
+model_file = "rf-AWNW"
+scaler_file = "ss-AWNW"
+
+day_mode = '22-11-2020'
+all_mode = 'All'
+train_mode = 'Train'
+test_mode = 'Test'
 
 
 def round_to_n(x, n):
@@ -250,7 +261,7 @@ def oversample_balance(data: pandas.DataFrame):
     while counter < mx:
 
         sub_data = data[data[ro_col].between(counter, counter + bucket, inclusive='right')]
-        if sub_data.shape[0] > 0:
+        if sub_data.shape[0] > 0 and float(sub_data[ro_col].min(axis=0, skipna=True)) > 0:
             temp.append(sub_data)
 
         max_count = max_count if sub_data.shape[0] < max_count else sub_data.shape[0]
@@ -271,3 +282,51 @@ def oversample_balance(data: pandas.DataFrame):
         results.append(pumped_data)
 
     return pandas.concat(results, ignore_index=True)
+
+
+def parse_well_id(well_id):
+    return f"Awoba NW {well_id}"
+
+
+def parse_well_id_2(well_id):
+    return f"Abura {well_id}"
+
+
+def print_graph(model: RandomForestRegressor, x):
+    for est, idx in zip(model.estimators_, len(model.estimators_)):
+        file = f'tree_{idx}.dot'
+        export_graphviz(model, out_file=file, feature_names=x.columns,
+                        class_names=['extreme', 'moderate', 'vulnerable', 'non-vulnerable'],
+                        rounded=True, proportion=False, precision=4, filled=True)
+
+
+def write_state_files(model, scaler):
+    pkl.dump(model, open(f"{model_file}.mdl", "wb"))
+    pkl.dump(scaler, open(f"{scaler_file}.sts", "wb"))
+
+
+def keep_useful_cols(data, columns=None):
+    if columns is None:
+        columns = [ro_col, dur_col, man_col, well_col, time_col, date_col, blind_col, flp_col, temp_col]
+    return data.drop(data.columns.difference(columns), axis=1)
+
+
+def read_state_files(mdl, scl):
+    mdl = pkl.load(open(f"{mdl}.mdl", "rb"))
+    scl = pkl.load(open(f"{scl}.sts", "rb"))
+    return mdl, scl
+
+
+def change_well_to_dummy(wl):
+    _l1, _l2, _s1, _s2 = 0, 0, 0, 0
+
+    if wl == parse_well_id(l1):
+        _l1 = 1
+    elif wl == parse_well_id(s1):
+        _s1 = 1
+    elif wl == parse_well_id(l2):
+        _l2 = 1
+    elif wl == parse_well_id(s2):
+        _s2 = 1
+
+    return _l1, _l2, _s1, _s2

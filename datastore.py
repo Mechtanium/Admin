@@ -225,8 +225,7 @@ def offset_wells(agg_data, how=None):
     data_2L = []
     for key in agg_data.keys():
         try:
-            temp = spj(agg_data[key][flow_key],
-                              agg_data[key][well_key], how)  # returns a [list of (well id, data)] tuples
+            temp = spj(agg_data[key][flow_key], agg_data[key][well_key], how)  # returns list of (well id, data) tuples
             for t in temp:
 
                 if t[0] == s1:

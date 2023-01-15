@@ -1,67 +1,83 @@
 # 'dataset' holds the input data for this script
 import os.path
-import pickle as pkl
 
 import gradio as gr
 import pandas
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import explained_variance_score, max_error, mean_absolute_error, mean_squared_error, \
+    mean_squared_log_error, median_absolute_error, mean_absolute_percentage_error, r2_score, mean_poisson_deviance, \
+    mean_gamma_deviance, mean_tweedie_deviance, d2_tweedie_score, mean_pinball_loss, d2_pinball_score, \
+    d2_absolute_error_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.tree import export_graphviz
-
 import datastore
-from local_utils import WellDataPoint, well_col, time_col, ro_col, blind_col, flp_col, date_col, id_col, dur_col
-from local_utils import man_col, temp_col, s1, s2, l1, l2, to_sec, out_folder, oversample_balance
+from local_utils import *
 
+MAX_DEPTH = 20
 N_EST = 10
 
-null_mode = 'Null'
-
-day_mode = '22-11-2020'
-all_mode = 'All'
-data_mode = all_mode
-
-train_mode = 'Train'
-test_mode = 'Test'
-mode = train_mode
-
-model_file = "rf-AWNW"
-scaler_file = "ss-AWNW"
+mode = {"app": test_mode, "data": all_mode, "regen": False}
 
 
 def clean_prepare_train(data_i, train_size=0.015, test_size=0.005):
+    # drop sparse column THP BLIND then drop empty rows for all remaining columns
     data_i.drop(axis=1, columns=[blind_col], inplace=True)
     data_i.dropna(axis=0, inplace=True, how="any")
     data_i.reset_index(inplace=True)
-    data_i.drop(axis=1, columns=["level_0", id_col, "index"], inplace=True, errors="ignore")
-    # data.to_csv("output/data.csv", index_label=id_col) if mode == all_mode else \
-    #     data.to_csv("output/data_22.csv", index_label=id_col)
+
+    # change well_id to dummies
     dummies = pandas.get_dummies(data_i[well_col])
     data_i = pandas.concat([data_i, dummies], axis=1).reindex(data_i.index)
     data_i.drop(columns=[well_col], axis=1, inplace=True)
-    data_i.drop(axis=1, columns=[flp_col, time_col, date_col], inplace=True, errors='ignore')
+
+    # remove useless columns
+    data_i = keep_useful_cols(data_i, [ro_col, dur_col, man_col, blind_col, temp_col] + dummies.columns.tolist())
+
+    # get x and y
     y = data_i[ro_col]
     x_i = data_i.drop(axis=1, columns=[ro_col])
-    # x.to_csv("output/x.csv", index_label=id_col)
-    # y.to_csv("output/y.csv", index_label=id_col)
-    # print(y.head())
-    # print(f"{y.shape[0]} rows")
-    # print(x.head())
+
+    # verify data row count
     print(f"\n{x_i.shape[0]} rows")
+
+    # fit scaler
     scaler_i = StandardScaler(copy=False)
     scaler_i.fit(x_i)
-    x_fit = scaler_i.transform(x_i)
+    x_fit = pandas.DataFrame(scaler_i.transform(x_i), columns=x_i.columns)
+
+    # data split
     x_train, x_test, y_train, y_test = \
         train_test_split(x_fit, y, random_state=30, train_size=train_size, test_size=test_size)
-    model_i = RandomForestRegressor(n_estimators=N_EST, random_state=30)
+
+    # model
+    model_i = RandomForestRegressor(n_estimators=N_EST, random_state=30, max_depth=MAX_DEPTH)
     model_i.fit(x_train, y_train)
+    print([est.get_depth() for est in model_i.estimators_])
+
+    # testing
     y_pred = model_i.predict(x_test)
     score_i = r2_score(y_test, y_pred)
+    print("explained_variance_score:", explained_variance_score(y_test, y_pred))
+    print("max_error:", max_error(y_test, y_pred))
+    print("mean_absolute_error:", mean_absolute_error(y_test, y_pred))
+    print("mean_squared_error:", mean_squared_error(y_test, y_pred))
+    print("mean_squared_log_error:", mean_squared_log_error(y_test, y_pred))
+    print("median_absolute_error:", median_absolute_error(y_test, y_pred))
+    print("mean_absolute_percentage_error:", mean_absolute_percentage_error(y_test, y_pred))
+    print("r2_score:", r2_score(y_test, y_pred))
+    print("mean_poisson_deviance:", mean_poisson_deviance(y_test, y_pred))
+    print("mean_gamma_deviance:", mean_gamma_deviance(y_test, y_pred))
+    print("mean_tweedie_deviance:", mean_tweedie_deviance(y_test, y_pred))
+    print("d2_tweedie_score:", d2_tweedie_score(y_test, y_pred))
+    print("mean_pinball_loss:", mean_pinball_loss(y_test, y_pred))
+    print("d2_pinball_score:", d2_pinball_score(y_test, y_pred))
+    print("d2_absolute_error_score:", d2_absolute_error_score(y_test, y_pred))
+
+    # create power_bi data payload
     x_test, y_test, y_pred = (pandas.DataFrame(x_test).reset_index(),
                               pandas.DataFrame(y_test).reset_index(),
-                              pandas.DataFrame(y_pred).reset_index()
-                              )
+                              pandas.DataFrame(y_pred).reset_index())
     data_run = pandas.concat([x_test, y_test, y_pred], axis=1).drop("index", axis=1)
 
     return model_i, scaler_i, score_i, x_i, data_run
@@ -74,16 +90,16 @@ def report_on(model_i, scaler_i, score_i, x_i):
         """)
 
     tests = [WellDataPoint(thp=661.84, day_sec=54100, man_pres=143.93, temp=93.9, _l1=0, _s1=1, _l2=0, _s2=0),
-             WellDataPoint(thp=1118.456152, day_sec=86050, man_pres=166.063, temp=79.70630396, _l1=1, _s1=0, _l2=0,
-                           _s2=0),
+             WellDataPoint(thp=1118.456, day_sec=86050, man_pres=166.063, temp=79.706, _l1=1, _s1=0, _l2=0, _s2=0),
              WellDataPoint(thp=609.08, day_sec=42600, man_pres=137.2, temp=95.477, _l1=0, _s1=0, _l2=0, _s2=1),
              WellDataPoint(thp=1118.07, day_sec=49400, man_pres=146.44, temp=98.5, _l1=0, _s1=0, _l2=1, _s2=0)]
 
     for test in tests:
         print(f"\n{test}")
         try:
-            test_x = pandas.DataFrame([test.get_x()], columns=x_i.columns)
-            y_vis_pred = model_i.predict(scaler_i.transform(test_x))
+            test_x = pandas.DataFrame(scaler_i.transform(pandas.DataFrame([test.get_x()], columns=x_i.columns)),
+                                      columns=x_i.columns)
+            y_vis_pred = model_i.predict(test_x)
             print(f"Real: \033[0;35m{test.get_y():.2f} psi\033[0m vs. "
                   f"Prediction: \033[0;35m{y_vis_pred[0]:.2f} psi\033[0m", flush=True)
         except ValueError:
@@ -99,57 +115,32 @@ def train(mode, best=(25, 10, 54, 0, 0)):
         report_on(model, scaler, score, x)
     else:
         # get data payload
-        data_dict = datastore.get_all_data()
+        if not os.path.exists(f"{out_folder}data_opt_balanced.csv"):
+            data_dict = datastore.get_all_data()
 
-        # search for the best offset combination model
-        # best = find_best(data_dict, model_search, best)
-        print(f"\033[1;31mFinal offsets\033[0m\n{s1}: {best[0]}, {l1}: {best[1]}, {s2}: {best[2]}, {l2}: {best[3]}")
-        data = datastore.offset_wells(data_dict, [x for x in best[:4]])
+            # search for the best offset combination model
+            # best = find_best(data_dict, model_search, best)
+            print(f"\033[1;31mFinal offsets\033[0m\n{s1}: {best[0]}, {l1}: {best[1]}, {s2}: {best[2]}, {l2}: {best[3]}")
+            data = datastore.offset_wells(data_dict, [x for x in best[:4]])
 
-        # remove unnecessary id columns
-        data.drop(data.columns.difference([ro_col, dur_col, man_col, well_col, time_col, date_col, blind_col, flp_col,
-                                           temp_col]), inplace=True, errors='ignore')
+            # remove unnecessary id columns
+            data = keep_useful_cols(data)
 
-        # dump it
-        data.to_csv(f"{out_folder}data_opt.csv", index_label=id_col)
+            # balance it by oversampling
+            data = oversample_balance(data)
 
-        # balance it by oversampling
-        data = oversample_balance(data)
-        data.to_csv(f"{out_folder}data_opt_balanced.csv", index_label=id_col)
+            # dump it
+            data.to_csv(f"{out_folder}data_opt_balanced.csv", index_label=id_col)
+        else:
+            data = pandas.read_csv(f"{out_folder}data_opt_balanced.csv")
 
         # create model
-        model, scaler, score, x, results = clean_prepare_train(data, train_size=0.75, test_size=0.25)
+        model, scaler, score, x, results = clean_prepare_train(keep_useful_cols(data), train_size=0.75, test_size=0.25)
         write_state_files(model, scaler)
         results.to_csv(f"{out_folder}POWER_BI_DATA.csv", index_label=id_col)
         report_on(model, scaler, score, x)
 
-        # try with no offsetting
-        # data = datastore.offset_wells(data_dict, [0, 0, 0, 0])
-        # data.drop(id_col, inplace=True, errors='ignore')
-        # data.to_csv(f"{out_folder}data_base.csv", index_label=id_col)
-        # model, scaler, score, x, _ = clean_prepare_train(data, train_size=0.75, test_size=0.25)
-        # report_on(model, scaler, score, x)
-
         return model
-
-
-def print_graph(model : RandomForestRegressor, x):
-    for est, idx in zip(model.estimators_, len(model.estimators_)):
-        file = f'tree_{idx}.dot'
-        export_graphviz(model, out_file=file, feature_names=x.columns,
-                        class_names=['extreme', 'moderate', 'vulnerable', 'non-vulnerable'],
-                        rounded=True, proportion=False, precision=4, filled=True)
-
-
-def write_state_files(model, scaler):
-    pkl.dump(model, open(f"{model_file}.mdl", "wb"))
-    pkl.dump(scaler, open(f"{scaler_file}.sts", "wb"))
-
-
-def read_state_files(mdl, scl):
-    mdl = pkl.load(open(f"{mdl}.mdl", "rb"))
-    scl = pkl.load(open(f"{scl}.sts", "rb"))
-    return mdl, scl
 
 
 def model_search(dt_dict, s_1, l_1, s_2, l_2, current_best):
@@ -173,28 +164,13 @@ def find_best(data_dict, model_search, best):
     return best
 
 
-def change_well_to_dummy(wl):
-    _l1, _l2, _s1, _s2 = 0, 0, 0, 0
-
-    if wl == parse_well_id(l1):
-        _l1 = 1
-    elif wl == parse_well_id(s1):
-        _s1 = 1
-    elif wl == parse_well_id(l2):
-        _l2 = 1
-    elif wl == parse_well_id(s2):
-        _s2 = 1
-
-    return _l1, _l2, _s1, _s2
-
-
-def app(hours, mins, secs, man_pres, temp, well, thp=None, regen=False):
+def app(hours, mins, secs, man_pres, temp, well, thp=None, regen=False, full_text_reply=True):
     global test_x, y_vis_pred
 
     dur_sec = to_sec(hours, mins, secs)
 
     if regen or not (os.path.exists(f"{model_file}.mdl") and os.path.exists(f"{scaler_file}.sts")):
-        train(data_mode)
+        train(mode['data'])
 
     mdl, scl = read_state_files(model_file, scaler_file)
 
@@ -205,22 +181,16 @@ def app(hours, mins, secs, man_pres, temp, well, thp=None, regen=False):
     test = WellDataPoint(thp=thp, day_sec=dur_sec, man_pres=man_pres, temp=temp, _l1=_l1, _s1=_s1, _l2=_l2, _s2=_s2)
     columns = ['Daylight duration (SEC)', 'Manifold Pressure (PSI)', 'TEMP (°F)', '1L', '1S', '2L', '2S']
     try:
-        test_x = pandas.DataFrame([test.get_x()], columns=columns)
-        y_vis_pred = mdl.predict(scl.transform(test_x))
+        test_x = pandas.DataFrame(scl.transform(pandas.DataFrame([test.get_x()], columns=columns)), columns=columns)
+        y_vis_pred = mdl.predict(test_x)
         print(f"Real: \033[0;35m{test.get_y():.2f} psi\033[0m vs. "
               f"Prediction: \033[0;35m{y_vis_pred[0]:.2f} psi\033[0m")
     except ValueError:
         print(test, flush=True)
+        raise
 
-    return f"{test.__plain__()}\nReal: {test.get_y():.2f} psi vs. Prediction: {y_vis_pred[0]:.2f} psi"
-
-
-def parse_well_id(well_id):
-    return f"Awoba NW {well_id}"
-
-
-def parse_well_id_2(well_id):
-    return f"Abura {well_id}"
+    return f"{test.__plain__()}\nReal: {test.get_y():.2f} psi vs. Prediction: {y_vis_pred[0]:.2f} psi" if \
+        full_text_reply else y_vis_pred
 
 
 def i_app(wl, pres):
@@ -235,9 +205,9 @@ def i_app(wl, pres):
 # get conversion factors
 factors = datastore.get_conversion_factors()
 
-if mode == train_mode:
+if mode['app'] == train_mode:
     app(23, 59, 40, 143.96, 79.523, parse_well_id(s2))
-    app(17, 2, 0, 144.41, 97.278, parse_well_id(l1), regen=True)
+    app(17, 2, 0, 144.41, 97.278, parse_well_id(l1), regen=mode['regen'])
 else:
     with gr.Blocks() as demo:
 
@@ -258,7 +228,6 @@ else:
             output = gr.Textbox(label="Results")
             greet_btn.click(fn=app, inputs=[hours, mins, secs, man_pres, temp, well, thp], outputs=output)
         with gr.Tab("Isaac's Approach"):
-
             # build interface to take in well selection and manifold pressure
             i_man_pres = gr.Number(label=man_col, value=143.96)
             i_well = gr.Radio(
@@ -271,5 +240,10 @@ else:
 
             # call i_app function with params on button click
             i_greet_btn.click(fn=i_app, inputs=[i_well, i_man_pres], outputs=i_output)
+        with gr.Tab("Dashboard"):
+            # create column for
+
+
+            pass
 
     demo.launch()
