@@ -21,6 +21,8 @@ temp_col = "TEMP (°F)"
 flp_col = "FLP (PSI)"
 ro_col = "THP R/O (PSI)"
 man_col = "Manifold Pressure (PSI)"
+sim_col = f'Predicted {ro_col}'
+ql_col = 'Liquid production (BBL/D)'
 out_folder = "output/"
 well_key = "wellhead"
 flow_key = "flowstation"
@@ -42,6 +44,10 @@ def round_to_n(x, n):
 
 def to_sec(h, m, s):
     return (int(h) * 60 * 60) + (int(m) * 60) + int(s)
+
+
+def from_sec(t):
+    return f"{t // (60 * 60):0>2}:{(t % (60 * 60)) // 60:0>2}:{(t % (60 * 60)) % 60:0>2}"
 
 
 def column_matcher(title):
@@ -330,3 +336,9 @@ def change_well_to_dummy(wl):
         _s2 = 1
 
     return _l1, _l2, _s1, _s2
+
+
+def calc_excel(pres):
+    # from well Abura 2S
+    return pres + 624, pres * 31.88
+

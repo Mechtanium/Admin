@@ -2,6 +2,7 @@
 import os.path
 
 import gradio as gr
+import numpy
 import pandas
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
@@ -11,6 +12,7 @@ from sklearn.metrics import explained_variance_score, max_error, mean_absolute_e
     d2_absolute_error_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
 import datastore
 from local_utils import *
 
@@ -53,31 +55,31 @@ def clean_prepare_train(data_i, train_size=0.015, test_size=0.005):
     # model
     model_i = RandomForestRegressor(n_estimators=N_EST, random_state=30, max_depth=MAX_DEPTH)
     model_i.fit(x_train, y_train)
-    print([est.get_depth() for est in model_i.estimators_])
+    # print([est.get_depth() for est in model_i.estimators_])
 
     # testing
     y_pred = model_i.predict(x_test)
     score_i = r2_score(y_test, y_pred)
-    print("explained_variance_score:", explained_variance_score(y_test, y_pred))
-    print("max_error:", max_error(y_test, y_pred))
-    print("mean_absolute_error:", mean_absolute_error(y_test, y_pred))
-    print("mean_squared_error:", mean_squared_error(y_test, y_pred))
-    print("mean_squared_log_error:", mean_squared_log_error(y_test, y_pred))
-    print("median_absolute_error:", median_absolute_error(y_test, y_pred))
-    print("mean_absolute_percentage_error:", mean_absolute_percentage_error(y_test, y_pred))
-    print("r2_score:", r2_score(y_test, y_pred))
-    print("mean_poisson_deviance:", mean_poisson_deviance(y_test, y_pred))
-    print("mean_gamma_deviance:", mean_gamma_deviance(y_test, y_pred))
-    print("mean_tweedie_deviance:", mean_tweedie_deviance(y_test, y_pred))
-    print("d2_tweedie_score:", d2_tweedie_score(y_test, y_pred))
-    print("mean_pinball_loss:", mean_pinball_loss(y_test, y_pred))
-    print("d2_pinball_score:", d2_pinball_score(y_test, y_pred))
-    print("d2_absolute_error_score:", d2_absolute_error_score(y_test, y_pred))
+    # print("explained_variance_score:", explained_variance_score(y_test, y_pred))
+    # print("max_error:", max_error(y_test, y_pred))
+    # print("mean_absolute_error:", mean_absolute_error(y_test, y_pred))
+    # print("mean_squared_error:", mean_squared_error(y_test, y_pred))
+    # print("mean_squared_log_error:", mean_squared_log_error(y_test, y_pred))
+    # print("median_absolute_error:", median_absolute_error(y_test, y_pred))
+    # print("mean_absolute_percentage_error:", mean_absolute_percentage_error(y_test, y_pred))
+    # print("r2_score:", r2_score(y_test, y_pred))
+    # print("mean_poisson_deviance:", mean_poisson_deviance(y_test, y_pred))
+    # print("mean_gamma_deviance:", mean_gamma_deviance(y_test, y_pred))
+    # print("mean_tweedie_deviance:", mean_tweedie_deviance(y_test, y_pred))
+    # print("d2_tweedie_score:", d2_tweedie_score(y_test, y_pred))
+    # print("mean_pinball_loss:", mean_pinball_loss(y_test, y_pred))
+    # print("d2_pinball_score:", d2_pinball_score(y_test, y_pred))
+    # print("d2_absolute_error_score:", d2_absolute_error_score(y_test, y_pred))
 
     # create power_bi data payload
     x_test, y_test, y_pred = (pandas.DataFrame(x_test).reset_index(),
                               pandas.DataFrame(y_test).reset_index(),
-                              pandas.DataFrame(y_pred).reset_index())
+                              pandas.DataFrame(y_pred, columns=[sim_col]).reset_index())
     data_run = pandas.concat([x_test, y_test, y_pred], axis=1).drop("index", axis=1)
 
     return model_i, scaler_i, score_i, x_i, data_run
@@ -194,12 +196,113 @@ def app(hours, mins, secs, man_pres, temp, well, thp=None, regen=False, full_tex
 
 
 def i_app(wl, pres):
-    # match well to conversion factor
-    factor = factors.loc[factors["Well"] == wl[6:]]["Conversion factor"]
-    factor.reindex(axis=0)
+    # match well to factors
+    factor = factors.loc[factors["Well"] == wl[6:]]
+
+    # retrieve conversion and flow factor
+    c_factor = factor["Conversion Factor"]
+    f_factor = factor["Flow Factor"]
 
     # return math result
-    return pres - [f for f in factor][0]
+    return f"""\
+Testing data
+    Manifold pressure: {pres} psi
+    Well: {wl}
+    
+Flowing tubing head pressure: {pres + [f for f in c_factor][0]:.2f} psi
+Q-liquid: {pres * [f for f in f_factor][0]:.2f} bbl/day"""
+
+
+scroll_data = pandas.read_csv(f"{out_folder}data_opt_balanced.csv")  # pandas.DataFrame()
+n_real = 0
+n_sim = 0
+mn = 0
+mx = 0
+_, _, _, _, results = clean_prepare_train(scroll_data, train_size=0.50, test_size=0.50)
+state_var = False
+results.insert(0, id_col, numpy.array(range(results.shape[0])), False)
+
+# randomize data rows and reset index
+scroll_data = scroll_data.sample(frac=1)
+scroll_data.drop([id_col, "index"], axis=1, inplace=True, errors="ignore")
+scroll_data.insert(0, id_col, numpy.array(range(scroll_data.shape[0])), False)
+y_range = min(scroll_data[ro_col]), max(scroll_data[ro_col])
+# async def load_data():
+#     global state_var
+#     if not state_var:
+#         state_var = True
+#         global scroll_data
+#         data = pandas.read_csv(f"{out_folder}data_opt_balanced.csv")
+#         model, scaler, score, x, results = clean_prepare_train(keep_useful_cols(data), train_size=0.50, test_size=0.50)
+#         i = 0
+#
+#         while i < results.shape[0]:
+#             await asyncio.sleep(1)
+#             i += 1
+#             new_row = results.iloc[[i]]
+#             print(new_row)
+#             scroll_data = pandas.concat([scroll_data, new_row], ignore_index=True)
+#             if scroll_data.shape[0] > 100:
+#                 scroll_data.drop(0, axis=0, inplace=True)
+#                 print(scroll_data.shape)
+
+
+# URL = "https://docs.google.com/spreadsheets/d/1ZQbeOeCaiLMidenqmwq7wC-ni7rdtUYQXH1XER6XyyQ/edit#gid=0"
+# csv_url = URL.replace('/edit#gid=', '/export?format=csv&gid=')
+#
+#
+# def get_data():
+#     return pandas.read_csv(csv_url)
+
+
+def get_real_data() -> pandas.DataFrame:
+    global results
+    global mn
+    global mx
+    mx += 1
+    mn = 0 if mx - 50 < 0 else mx - 50
+    sl = results.iloc[mn:mx]
+    sl.insert(0, time_col, numpy.array([from_sec(int(r)) for r in sl[id_col].tolist()]), False)
+    return sl  # scroll_data
+
+
+def get_sim_data() -> pandas.DataFrame:
+    global results
+    sl = results.iloc[mn:mx]
+    sl.insert(0, time_col, numpy.array([from_sec(r) for r in sl[id_col].tolist()]), False)
+    return sl  # scroll_data
+
+
+x_real = 0
+x_pres = 0
+x_ql = 0
+
+
+def get_x_real_data() -> pandas.DataFrame:
+    global results
+    sl = scroll_data.iloc[mn:mx]
+    sl = sl.drop(time_col, axis=1, errors="ignore")
+    sl.insert(0, time_col, numpy.array([from_sec(int(r)) for r in sl[id_col].tolist()]), False)
+    return sl  # scroll_data
+
+
+def get_x_sim_pres_data() -> pandas.DataFrame:
+    global results
+    sl = scroll_data.iloc[mn:mx]
+    sl = sl.drop(sim_col, axis=1, errors="ignore")
+    sl = sl.drop(time_col, axis=1, errors="ignore")
+    sl.insert(0, time_col, numpy.array([from_sec(int(r)) for r in sl[id_col].tolist()]), False)
+    sl.insert(0, sim_col, numpy.array([calc_excel(r)[0] for r in sl[man_col].tolist()]), False)
+    return sl  # scroll_data
+
+
+def get_x_sim_ql_data() -> pandas.DataFrame:
+    global results
+    sl = scroll_data.iloc[mn:mx]
+    sl = sl.drop(time_col, axis=1, errors="ignore")
+    sl.insert(0, time_col, numpy.array([from_sec(int(r)) for r in sl[id_col].tolist()]), False)
+    sl.insert(0, ql_col, numpy.array([calc_excel(r)[1] for r in sl[man_col].tolist()]), False)
+    return sl  # scroll_data
 
 
 # get conversion factors
@@ -211,7 +314,7 @@ if mode['app'] == train_mode:
 else:
     with gr.Blocks() as demo:
 
-        with gr.Tab("AI Approach"):
+        with gr.Tab("AI approach"):
             hours = gr.Number(label="Hours (24-hour format)", value=23)
             mins = gr.Number(label="Minutes", value=59)
             secs = gr.Number(label="Seconds", value=40)
@@ -227,7 +330,8 @@ else:
             greet_btn.style(full_width=True)
             output = gr.Textbox(label="Results")
             greet_btn.click(fn=app, inputs=[hours, mins, secs, man_pres, temp, well, thp], outputs=output)
-        with gr.Tab("Isaac's Approach"):
+
+        with gr.Tab("Excel approach"):
             # build interface to take in well selection and manifold pressure
             i_man_pres = gr.Number(label=man_col, value=143.96)
             i_well = gr.Radio(
@@ -240,10 +344,36 @@ else:
 
             # call i_app function with params on button click
             i_greet_btn.click(fn=i_app, inputs=[i_well, i_man_pres], outputs=i_output)
+
         with gr.Tab("Dashboard"):
-            # create column for
+            # pull data into line plot
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### AI real vs. calculated")
+                    gr.LinePlot(value=get_real_data, y=ro_col, x=time_col, label="Awoba 2L", title="Real Tubing Head Pressure",
+                                y_title=ro_col, x_title=time_col, every=1, height=150, width=600)
+                    gr.LinePlot(value=get_sim_data, y=sim_col, x=time_col, label="Awoba 2L", title="Calculated Tubing Head Pressure",
+                                y_title=sim_col, x_title=time_col, every=1, height=150, width=600)
+                with gr.Column():
+                    gr.Markdown("### Excel real vs. calculated")
+                    gr.LinePlot(value=get_x_real_data, y=ro_col, x=time_col, label="Abura 2S", title="Real Tubing Head Pressure",
+                                y_title=ro_col, x_title=time_col, every=1, height=150, width=600, y_lim=y_range)
+                    gr.LinePlot(value=get_x_sim_pres_data, y=sim_col, x=time_col, label="Abura 2S", title="Calculated Tubing Head Pressure",
+                                y_title=sim_col, x_title=time_col, every=1, height=150, width=600, y_lim=y_range)
+                    gr.LinePlot(value=get_x_sim_ql_data, y=ql_col, x=time_col, label="Abura 2S", title="Calculated Production",
+                                y_title=ql_col, x_title=time_col, every=1, height=150, width=600)
 
+            # with gr.Column():
+            #     with gr.Row():
+            #         gr.LinePlot(value=get_real_data, y=ro_col, x=id_col, label="Real Tubing Head Pressure",
+            #                     y_title=ro_col, x_title=time_col, every=1, height=80, width=600)
+            #         gr.LinePlot(value=get_sim_data, y=sim_col, x=id_col, label="Calculated Tubing Head Pressure",
+            #                     y_title=sim_col, x_title=time_col, every=1, height=80, width=600)
+            #     with gr.Row():
+            #         gr.LinePlot(value=get_real_data, y=ro_col, x=id_col, label="Real Tubing Head Pressure",
+            #                     y_title=ro_col, x_title=time_col, every=1, height=80, width=600)
+            #         gr.LinePlot(value=get_sim_data, y=sim_col, x=id_col, label="Calculated Tubing Head Pressure",
+            #                     y_title=sim_col, x_title=time_col, every=1, height=80, width=600)
 
-            pass
+    demo.launch(enable_queue=True)
 
-    demo.launch()
